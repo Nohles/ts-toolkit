@@ -50,6 +50,7 @@ export class WebPubFrameManager {
 
     async load(modules: ModuleName[] = []): Promise<Window> {
         return this.serialize(() => new Promise((res, rej) => {
+            if (this.destroyed) { rej(new Error("Frame is destroyed")); return; }
             if (this.loader) {
                 const wnd = this.frame.contentWindow!;
                 if ([...this.currModules].sort().join("|") === [...modules].sort().join("|")) {
@@ -65,6 +66,7 @@ export class WebPubFrameManager {
                 return;
             }
             this.frame.onload = () => {
+                if (this.destroyed) return;
                 const wnd = this.frame.contentWindow!;
                 this.loader = new Loader(wnd as ReadiumWindow, modules);
                 this.currModules = modules;

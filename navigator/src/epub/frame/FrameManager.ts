@@ -51,6 +51,7 @@ export class FrameManager {
 
     async load(modules: ModuleName[]): Promise<Window> {
         return this.serialize(() => new Promise((res, rej) => {
+            if (this.destroyed) { rej(new Error("Frame is destroyed")); return; }
             if(this.loader) {
                 const wnd = this.frame.contentWindow!;
                 // Check if currently loaded modules are equal
@@ -67,6 +68,7 @@ export class FrameManager {
                 return;
             }
             this.frame.onload = () => {
+                if (this.destroyed) return;
                 const wnd = this.frame.contentWindow!;
                 this.loader = new Loader(wnd as ReadiumWindow, modules);
                 this.currModules = modules;

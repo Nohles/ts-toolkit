@@ -85,6 +85,36 @@ for (const kind of ["epub", "webpub", "fixed"] as const) describe(`${kind} termi
         expect(f.bridge.destroy).toHaveBeenCalledOnce();
     });
 
+    test("rejects a queued load before it can recreate a destroyed frame", async () => {
+        const f = fixture(kind, true);
+        const loading = kind === "fixed" ? f.manager.load([], "about:blank") : f.manager.load([]);
+        const outcome = loading.catch(error => error);
+        await f.manager.destroy();
+        expect(await completed(outcome)).toBe(true);
+        expect(await outcome).toEqual(expect.objectContaining({ message: "Frame is destroyed" }));
+        expect(f.frame.loader).toBeUndefined();
+        expect(f.frame.frame.parentElement).toBeNull();
+    });
+
+    test("ignores a load callback already delivered when destruction starts", async () => {
+        const f = fixture(kind, true);
+        f.frame.loader = undefined;
+        f.frame.source = "about:blank";
+        const addListener = vi.spyOn(f.frame.frame, "addEventListener");
+        const removeListener = vi.spyOn(f.frame.frame, "removeEventListener");
+        const loading = kind === "fixed" ? f.manager.load([], "about:blank") : f.manager.load([]);
+        // Already-started loads may remain pending; only terminal cleanup is guaranteed.
+        void loading.catch(() => {});
+        await Promise.resolve();
+        const callback = kind === "fixed" ? addListener.mock.calls.find(call => call[0] === "load")?.[1]
+            : f.frame.frame.onload;
+        expect(callback).toBeTypeOf("function");
+        await f.manager.destroy();
+        expect(() => (callback as Function)(new Event("load"))).not.toThrow();
+        expect(f.frame.loader).toBeUndefined();
+        if (kind === "fixed") expect(removeListener).toHaveBeenCalledWith("load", callback);
+    });
+
     test("terminal cleanup bypasses a serialized unfocus awaiting a remote reply", async () => {
         const f = fixture(kind, true);
         let reply: (() => void) | undefined;
