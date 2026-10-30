@@ -11,6 +11,7 @@ const LOWER_BOUNDARY = 5;
 export class FramePoolManager {
     private readonly container: HTMLElement;
     private readonly positions: Locator[];
+    private destroyPromise: Promise<void> | undefined;
     private _currentFrame: FrameManager | undefined;
     private currentCssProperties: { [key: string]: string } | undefined;
     private readonly pool: Map<string, FrameManager> = new Map();
@@ -62,7 +63,11 @@ export class FramePoolManager {
         this.pool.forEach(f => f.removeResizeTarget(selector));
     }
 
-    async destroy() {
+    destroy(): Promise<void> {
+        return this.destroyPromise ??= this.destroyResources();
+    }
+
+    private async destroyResources() {
         // Wait for all in-progress loads to complete
         let iit = this.inprogress.values();
         let inp = iit.next();
@@ -76,26 +81,21 @@ export class FramePoolManager {
         }
         this.inprogress.clear();
 
-        // Destroy all frames
-        let fit = this.pool.values();
-        let frm = fit.next();
-        while(frm.value) {
-            await (frm.value as FrameManager).destroy();
-            frm = fit.next();
-        }
+        // Attempt every release even if a frame or injector fails. No disposed
+        // frame, current-frame reference or cached blob remains owned by the pool.
+        const results = await Promise.allSettled([...this.pool.values()].map(frame => frame.destroy()));
+        const errors: unknown[] = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
         this.pool.clear();
-
-        // Revoke all blobs
-        this.blobs.forEach(v => v.reset());
+        this._currentFrame = undefined;
+        // 2.14 caches builders, which own both the prepared URL and Resource.
+        for (const builder of this.blobs.values()) {
+            try { builder.reset(); } catch (error) { errors.push(error); }
+        }
         this.blobs.clear();
-
-        // Clean up injector if it exists
-        this.injector?.dispose();
-
-        // Empty container of elements
-        this.container.childNodes.forEach(v => {
-            if(v.nodeType === Node.ELEMENT_NODE || v.nodeType === Node.TEXT_NODE) v.remove();
-        })
+        this.pendingUpdates.clear();
+        try { this.injector?.dispose(); } catch (error) { errors.push(error); }
+        this.container.replaceChildren();
+        if (errors.length) throw new AggregateError(errors, "Failed to dispose frame pool");
     }
 
     async update(pub: Publication, locator: Locator, modules: ModuleName[], force=false) {

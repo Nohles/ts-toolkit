@@ -149,6 +149,7 @@ export class Injector implements IInjector {
             }
         }
         this.createdBlobUrls.clear();
+        this.blobStore.clear();
     }
 
     public getAllowedDomains(): string[] {

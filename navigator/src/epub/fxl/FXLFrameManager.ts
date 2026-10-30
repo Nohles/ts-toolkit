@@ -6,6 +6,7 @@ import type { ReadiumWindow } from "@readium/navigator-html-injectables";
 import { IContentProtectionConfig, IKeyboardPeripheralsConfig } from "../../Navigator.ts";
 import { KeyboardConditionBridge } from "../../peripherals/KeyboardConditionBridge.ts";
 import { createSerializer } from "../../helpers/serialize.ts";
+import { disposeFrame } from "../frame/FrameDisposal.ts";
 
 export class FXLFrameManager {
     private frame: HTMLIFrameElement;
@@ -20,6 +21,7 @@ export class FXLFrameManager {
     private pendingUnwatchSelectors: string[] = [];
     private conditionBridge?: KeyboardConditionBridge;
     private currModules: ModuleName[] = [];
+    private destroyed = false;
 
     // NEW
     public wrapper: HTMLDivElement;
@@ -201,12 +203,18 @@ export class FXLFrameManager {
     }
 
     async destroy() {
-        return this.serialize(async () => {
-            this.conditionBridge?.destroy();
-            await this.unfocusNow();
-            this.loader?.destroy();
-            this.wrapper.remove();
-        });
+        if (this.destroyed) return;
+        this.destroyed = true;
+        try {
+            disposeFrame({ frame: this.frame, wrapper: this.wrapper, conditionBridge: this.conditionBridge, comms: this.comms, loader: this.loader });
+        } finally {
+            this.conditionBridge = undefined;
+            this.comms = undefined;
+            this.loader = undefined;
+            this.currModules = [];
+            this.loadPromise = undefined;
+            this.showPromise = undefined;
+        }
     }
 
     async unload() {

@@ -7,6 +7,7 @@ import { IContentProtectionConfig, IKeyboardPeripheralsConfig } from "../Navigat
 
 export class WebPubFramePoolManager {
     private readonly container: HTMLElement;
+    private destroyPromise: Promise<void> | undefined;
     private _currentFrame: WebPubFrameManager | undefined;
     private currentCssProperties: { [key: string]: string } | undefined;
     private readonly pool: Map<string, WebPubFrameManager> = new Map();
@@ -51,7 +52,11 @@ export class WebPubFramePoolManager {
         this.pool.forEach(f => f.removeResizeTarget(selector));
     }
 
-    async destroy() {
+    destroy(): Promise<void> {
+        return this.destroyPromise ??= this.destroyResources();
+    }
+
+    private async destroyResources() {
         // Wait for all in-progress loads to complete
         let iit = this.inprogress.values();
         let inp = iit.next();
@@ -65,29 +70,21 @@ export class WebPubFramePoolManager {
         }
         this.inprogress.clear();
 
-        // Destroy all frames
-        let fit = this.pool.values();
-        let frm = fit.next();
-        while(frm.value) {
-            await (frm.value as WebPubFrameManager).destroy();
-            frm = fit.next();
-        }
+        // Attempt every release even if a frame or injector fails. No disposed
+        // frame, current-frame reference or cached blob remains owned by the pool.
+        const results = await Promise.allSettled([...this.pool.values()].map(frame => frame.destroy()));
+        const errors: unknown[] = results.flatMap(result => result.status === "rejected" ? [result.reason] : []);
         this.pool.clear();
-
-        // Revoke all blobs
-        this.blobs.forEach(v => {
-            this.injector?.releaseBlobUrl?.(v);
-            URL.revokeObjectURL(v);
-        });
+        this._currentFrame = undefined;
+        for (const url of this.blobs.values()) {
+            try { await this.injector?.releaseBlobUrl?.(url); } catch (error) { errors.push(error); }
+            try { URL.revokeObjectURL(url); } catch (error) { errors.push(error); }
+        }
         this.blobs.clear();
-
-        // Clean up injector if it exists
-        this.injector?.dispose();
-
-        // Empty container of elements
-        this.container.childNodes.forEach(v => {
-            if(v.nodeType === Node.ELEMENT_NODE || v.nodeType === Node.TEXT_NODE) v.remove();
-        })
+        this.pendingUpdates.clear();
+        try { this.injector?.dispose(); } catch (error) { errors.push(error); }
+        this.container.replaceChildren();
+        if (errors.length) throw new AggregateError(errors, "Failed to dispose frame pool");
     }
 
     async update(pub: Publication, locator: Locator, modules: ModuleName[]) {

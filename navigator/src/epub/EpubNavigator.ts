@@ -116,7 +116,9 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
     private readonly _suspiciousActivityListener: ((event: Event) => void) | null = null;
     private readonly _keyboardPeripheralListener: ((event: Event) => void) | null = null;
 
+    private destroyPromise: Promise<void> | undefined;
     private resizeObserver: ResizeObserver;
+    private resizeFrame: number | undefined;
 
     private readonly _decoratorConfig: DecoratorConfig;
 
@@ -239,7 +241,13 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
         // We use a resizeObserver cos’ the container parent may not be the width of
         // the document/window e.g. app using a docking system with left and right panels.
         // If we observe this.container, that won’t obviously work since we set its width.
-        this.resizeObserver = new ResizeObserver(() => this.ownerWindow.requestAnimationFrame(async () => await this.resizeHandler()));
+        this.resizeObserver = new ResizeObserver(() => {
+            if (this._destroyed || this.resizeFrame !== undefined) return;
+            this.resizeFrame = this.ownerWindow.requestAnimationFrame(async () => {
+                this.resizeFrame = undefined;
+                if (!this._destroyed) await this.resizeHandler();
+            });
+        });
         this.resizeObserver.observe(this.container.parentElement || document.documentElement);
     }
 
@@ -431,6 +439,7 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
     }
 
     async resizeHandler() {
+        if (this._destroyed) return;
         // We check the parentElement cos we want to remove constraint from the container
         // and the container may not be the entire width of the document/window
         const parentEl = this.container.parentElement || document.documentElement;
@@ -1014,9 +1023,20 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
 
     // End of Decoration
 
-    public async destroy() {
-        // Flag synchronously so an in-flight load() bails before attaching frames.
+    public destroy(): Promise<void> {
+        return this.destroyPromise ??= this.destroyResources();
+    }
+
+    private async destroyResources() {
+        if (this._destroyed) return;
+        // Preserve the upstream guard for an in-flight load() while disposing
+        // locally; a departing iframe cannot acknowledge terminal cleanup.
         this._destroyed = true;
+        this.resizeObserver.disconnect();
+        if (this.resizeFrame !== undefined) {
+            this.ownerWindow.cancelAnimationFrame(this.resizeFrame);
+            this.resizeFrame = undefined;
+        }
         if (this._suspiciousActivityListener) {
             window.removeEventListener(NAVIGATOR_SUSPICIOUS_ACTIVITY_EVENT, this._suspiciousActivityListener);
         }
