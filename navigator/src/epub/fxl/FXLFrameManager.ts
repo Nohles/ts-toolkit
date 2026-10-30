@@ -6,6 +6,7 @@ import type { ReadiumWindow } from "@readium/navigator-html-injectables";
 import { IContentProtectionConfig, IKeyboardPeripheralsConfig } from "../../Navigator.ts";
 import { KeyboardConditionBridge } from "../../peripherals/KeyboardConditionBridge.ts";
 import { createSerializer } from "../../helpers/serialize.ts";
+import { disposeFrame } from "../frame/FrameDisposal.ts";
 
 export class FXLFrameManager {
     private frame: HTMLIFrameElement;
@@ -20,6 +21,8 @@ export class FXLFrameManager {
     private pendingUnwatchSelectors: string[] = [];
     private conditionBridge?: KeyboardConditionBridge;
     private currModules: ModuleName[] = [];
+    private destroyed = false;
+    private clearLoadListeners?: () => void;
 
     // NEW
     public wrapper: HTMLDivElement;
@@ -72,6 +75,7 @@ export class FXLFrameManager {
     }
 
     private async loadNow(modules: ModuleName[], source: string): Promise<Window> {
+        if (this.destroyed) throw new Error("Frame is destroyed");
         if(!this.frameIsAppended) {
             this.wrapper.appendChild(this.frame);
             this.frameIsAppended = true;
@@ -102,17 +106,27 @@ export class FXLFrameManager {
                 try { res(wnd); this.loadPromise = undefined; } catch (error) {}
                 return;
             }
-            this.frame.addEventListener("load", () => {
+            const onLoad = () => {
+                this.clearLoadListeners?.();
+                if (this.destroyed) return;
                 const wnd = this.frame.contentWindow!;
                 this.loader = new Loader(wnd as ReadiumWindow, modules);
                 this.currModules = modules;
                 this.peripherals.observe(this.wrapper);
                 this.peripherals.observe(wnd);
                 try { res(wnd); } catch (error) {};
-            }, { once: true });
-            this.frame.addEventListener("error", (e) => {
+            };
+            const onError = (e: ErrorEvent) => {
+                this.clearLoadListeners?.();
                 try { rej(e.error); this.loadPromise = undefined; } catch (error) {};
-            }, { once: true });
+            };
+            this.clearLoadListeners = () => {
+                this.frame.removeEventListener("load", onLoad);
+                this.frame.removeEventListener("error", onError);
+                this.clearLoadListeners = undefined;
+            };
+            this.frame.addEventListener("load", onLoad, { once: true });
+            this.frame.addEventListener("error", onError, { once: true });
             this.frame.style.removeProperty("display");
             this.frame.contentWindow!.location.replace(this.source);
         });
@@ -201,12 +215,19 @@ export class FXLFrameManager {
     }
 
     async destroy() {
-        return this.serialize(async () => {
-            this.conditionBridge?.destroy();
-            await this.unfocusNow();
-            this.loader?.destroy();
-            this.wrapper.remove();
-        });
+        if (this.destroyed) return;
+        this.destroyed = true;
+        this.clearLoadListeners?.();
+        try {
+            disposeFrame({ frame: this.frame, wrapper: this.wrapper, conditionBridge: this.conditionBridge, comms: this.comms, loader: this.loader });
+        } finally {
+            this.conditionBridge = undefined;
+            this.comms = undefined;
+            this.loader = undefined;
+            this.currModules = [];
+            this.loadPromise = undefined;
+            this.showPromise = undefined;
+        }
     }
 
     async unload() {

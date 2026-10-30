@@ -5,6 +5,7 @@ import { sML } from "@readium/helpers";
 import { IContentProtectionConfig, IKeyboardPeripheralsConfig } from "../Navigator.ts";
 import { KeyboardConditionBridge } from "../peripherals/KeyboardConditionBridge.ts";
 import { createSerializer } from "../helpers/serialize.ts";
+import { disposeFrame } from "../epub/frame/FrameDisposal.ts";
 
 export class WebPubFrameManager {
     private frame: HTMLIFrameElement;
@@ -49,6 +50,7 @@ export class WebPubFrameManager {
 
     async load(modules: ModuleName[] = []): Promise<Window> {
         return this.serialize(() => new Promise((res, rej) => {
+            if (this.destroyed) { rej(new Error("Frame is destroyed")); return; }
             if (this.loader) {
                 const wnd = this.frame.contentWindow!;
                 if ([...this.currModules].sort().join("|") === [...modules].sort().join("|")) {
@@ -64,6 +66,7 @@ export class WebPubFrameManager {
                 return;
             }
             this.frame.onload = () => {
+                if (this.destroyed) return;
                 const wnd = this.frame.contentWindow!;
                 this.loader = new Loader(wnd as ReadiumWindow, modules);
                 this.currModules = modules;
@@ -133,13 +136,16 @@ export class WebPubFrameManager {
     }
 
     async destroy() {
-        return this.serialize(async () => {
-            this.conditionBridge?.destroy();
-            await this.hideNow();
-            this.loader?.destroy();
-            this.frame.remove();
-            this.destroyed = true;
-        });
+        if (this.destroyed) return;
+        this.destroyed = true;
+        try {
+            disposeFrame({ frame: this.frame, conditionBridge: this.conditionBridge, comms: this.comms, loader: this.loader });
+        } finally {
+            this.conditionBridge = undefined;
+            this.comms = undefined;
+            this.loader = undefined;
+            this.currModules = [];
+        }
     }
 
     async hide(): Promise<void> {
