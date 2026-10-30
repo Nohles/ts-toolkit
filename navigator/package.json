@@ -1,19 +1,19 @@
 {
-  "name": "@readium/navigator",
-  "version": "2.14.0",
+  "name": "@nohles/readium-navigator",
+  "version": "2.14.0-nohles.1",
   "type": "module",
   "description": "Next generation SDK for publications in Web Apps",
   "author": "readium",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/readium/ts-toolkit.git",
+    "url": "git+https://github.com/Nohles/ts-toolkit.git",
     "directory": "navigator"
   },
   "license": "BSD-3-Clause",
   "bugs": {
-    "url": "https://github.com/readium/ts-toolkit/issues"
+    "url": "https://github.com/Nohles/ts-toolkit/issues"
   },
-  "homepage": "https://github.com/readium/ts-toolkit",
+  "homepage": "https://github.com/Nohles/ts-toolkit",
   "keywords": [
     "readium",
     "epub",
@@ -68,5 +68,10 @@
     "typescript": "^5.9.3",
     "vite": "^7.3.1",
     "vitest": "4.1.6"
+  },
+  "publishConfig": {
+    "registry": "http://192.168.1.202:4873/",
+    "access": "public",
+    "tag": "reader"
   }
 }
