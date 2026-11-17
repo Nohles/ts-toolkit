@@ -1,6 +1,6 @@
 {
   "name": "@nohles/readium-navigator",
-  "version": "2.14.0-nohles.1",
+  "version": "2.14.0-nohles.2",
   "type": "module",
   "description": "Next generation SDK for publications in Web Apps",
   "author": "readium",
