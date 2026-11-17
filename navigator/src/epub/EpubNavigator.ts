@@ -1304,7 +1304,19 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
     get timeline(): Timeline {
         const t = this.pub.timeline;
         if (!this._timelineAugmented && this.positions?.length) {
-            const positions = this.positions;
+            const positionsByHref = new Map<string, { first: Locator; fragments: Map<string, Locator> }>();
+            for (const position of this.positions) {
+                const href = position.href;
+                let entries = positionsByHref.get(href);
+                if (!entries) {
+                    entries = { first: position, fragments: new Map() };
+                    positionsByHref.set(href, entries);
+                } else if ((position.locations.position ?? Infinity) < (entries.first.locations.position ?? Infinity)) {
+                    entries.first = position;
+                }
+                const fragment = position.locations.fragments?.[0];
+                if (fragment !== undefined && !entries.fragments.has(fragment)) entries.fragments.set(fragment, position);
+            }
             // We have no way to tell which position within an href corresponds to which
             // toc entry (fragment ids aren't resolvable against the positions list). So
             // only the first *leaf* entry for a given href without a fragment match gets
@@ -1319,19 +1331,15 @@ export class EpubNavigator extends VisualNavigator implements Configurable<Confi
                 const hashIndex = link.href.indexOf('#');
                 const bare = hashIndex >= 0 ? link.href.slice(0, hashIndex) : link.href;
                 const fragment = hashIndex >= 0 ? link.href.slice(hashIndex + 1) : undefined;
-                const entries = positions.filter(p => p.href === bare);
-                if (!entries.length) return {};
-                const atFragment = fragment
-                    ? entries.find(p => p.locations.fragments?.[0] === fragment)
-                    : undefined;
+                const entries = positionsByHref.get(bare);
+                if (!entries) return {};
+                const atFragment = fragment ? entries.fragments.get(fragment) : undefined;
                 let candidate: Locator | undefined;
                 if (atFragment) {
                     candidate = atFragment;
                 } else if (!assignedHrefs.has(bare)) {
                     assignedHrefs.add(bare);
-                    candidate = entries.reduce((min, p) =>
-                        (p.locations.position ?? Infinity) < (min.locations.position ?? Infinity) ? p : min
-                    );
+                    candidate = entries.first;
                 } else {
                     candidate = undefined;
                 }

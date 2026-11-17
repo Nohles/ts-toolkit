@@ -1,3 +1,4 @@
+import { framePoolWindow } from "./framePoolWindow.ts";
 import { ModuleName } from "@readium/navigator-html-injectables";
 import { Locator, Publication } from "@readium/shared";
 import FrameBlobBuilder, { UpgradeInsecureRequests } from "./FrameBlobBuilder.ts";
@@ -114,18 +115,8 @@ export class FramePoolManager {
         // Create a new progress that doesn't resolve until complete
         // loading of the resource and its dependencies has finished.
         const progressPromise = new Promise<void>(async (resolve, reject) => {
-            const disposal: string[] = [];
-            const creation: string[] = [];
-            this.positions.forEach((l, j) => {
-                if(j > (i + UPPER_BOUNDARY) || j < (i - UPPER_BOUNDARY)) {
-                    if(!disposal.includes(l.href)) disposal.push(l.href);
-                }
-                if(j < (i + LOWER_BOUNDARY) && j > (i - LOWER_BOUNDARY)) {
-                    if(!creation.includes(l.href)) creation.push(l.href);
-                }
-            });
+            const { creation, disposal } = framePoolWindow(this.positions, i, UPPER_BOUNDARY, LOWER_BOUNDARY);
             disposal.forEach(async href => {
-                if(creation.includes(href)) return;
                 if(!this.pool.has(href)) return;
                 await this.pool.get(href)?.destroy();
                 this.pool.delete(href);

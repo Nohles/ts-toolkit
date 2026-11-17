@@ -933,3 +933,81 @@ describe('Timeline – tocEntryFor', () => {
     expect(t.tocEntryFor(t.items[0])?.link.href).toBe('chapter1.html');
   });
 });
+
+describe('Timeline – large publication scaling', () => {
+  it('indexes TOC links once when constructing a large timeline', () => {
+    let hrefReads = 0;
+    const count = 2_000;
+    const readingOrder = ro(...Array.from({ length: count }, (_, i) => ({ href: `chapter-${i}.xhtml` })));
+    const tocLinks = toc(...Array.from({ length: count }, (_, i) => ({ href: `chapter-${i}.xhtml`, title: `Chapter ${i}` })));
+    for (const link of tocLinks.items) {
+      const href = link.href;
+      Object.defineProperty(link, 'href', { get: () => { hrefReads++; return href; } });
+    }
+    const timeline = build(readingOrder, tocLinks);
+    expect(timeline.items).toHaveLength(count);
+    expect(timeline.items[count - 1].title).toBe(`Chapter ${count - 1}`);
+    expect(hrefReads).toBeLessThanOrEqual(count * 10);
+  });
+
+  it('resolves contextualized TOC resource starts without a scan for each entry', () => {
+    let referenceReads = 0;
+    const count = 2_000;
+    const timeline = build(
+      ro(...Array.from({ length: count }, (_, i) => ({ href: `chapter-${i}.xhtml`, title: `Chapter ${i}` }))),
+      toc(...Array.from({ length: count }, (_, i) => ({ href: `chapter-${i}.xhtml`, title: `Chapter ${i}` }))),
+    );
+    timeline.augment((_item, link) => ({ position: Number(link.href.match(/\d+/)?.[0]) + 1 }));
+    for (const item of timeline.items) {
+      const references = item.references;
+      Object.defineProperty(item, 'references', { get: () => { referenceReads++; return references; } });
+    }
+    const entries = timeline.contextualizedToc;
+    expect(entries).toHaveLength(count);
+    expect(entries[count - 1].position).toBe(String(count));
+    expect(referenceReads).toBeLessThanOrEqual(count * 3);
+  });
+
+  it('keeps declaration order when resource links and fragment-only links interleave', () => {
+    const timeline = build(ro({ href: 'a' }, { href: 'b' }), toc(
+      { href: '#t=60', title: 'Global one' },
+      { href: 'a#t=90', title: 'A only' },
+      { href: '#t=0', title: 'Global start' },
+      { href: 'a', title: 'A start' },
+      { href: '#t=120', title: 'Global two' },
+      { href: 'b#t=150', title: 'B only' },
+    ));
+    expect(clean(timeline.items)).toEqual([
+      { title: 'Global start', references: ['a'], children: [
+        { title: 'Global one', references: ['a#t=60'] },
+        { title: 'A only', references: ['a#t=90'] },
+        { title: 'Global two', references: ['a#t=120'] },
+      ] },
+      { title: 'Global start', references: ['b'], children: [
+        { title: 'Global one', references: ['b#t=60'] },
+        { title: 'Global two', references: ['b#t=120'] },
+        { title: 'B only', references: ['b#t=150'] },
+      ] },
+    ]);
+  });
+
+  it('keeps first-match precedence for duplicate resources, secondary references and wildcards', () => {
+    const first: TimelineItem = { references: ['a', 'b'], position: 1 };
+    const wildcard: TimelineItem = { references: ['#global'], position: 2 };
+    const repeated: TimelineItem = { references: ['a', 'c'], position: 3 };
+    const links = toc({ href: 'a', title: 'A' }, { href: 'b', title: 'B' }, { href: 'c', title: 'C' }, { href: 'unknown', title: 'Unknown' });
+    const timeline = new Timeline([first, wildcard, repeated], new Map(), [], links.items);
+    expect(timeline.contextualizedToc.map(entry => entry.position)).toEqual(['1', '1', '2', '2']);
+  });
+
+  it('rebuilds resource lookups from current references when depth invalidates the displayed TOC', () => {
+    const first: TimelineItem = { references: ['a'], position: 1 };
+    const second: TimelineItem = { references: ['b'], position: 2 };
+    const timeline = new Timeline([first, second], new Map(), [], toc({ href: 'a' }, { href: 'b' }).items);
+    expect(timeline.contextualizedToc.map(entry => entry.position)).toEqual(['1', '2']);
+    first.references = ['b'];
+    second.references = ['a'];
+    timeline.depth = 1;
+    expect(timeline.contextualizedToc.map(entry => entry.position)).toEqual(['2', '1']);
+  });
+});
