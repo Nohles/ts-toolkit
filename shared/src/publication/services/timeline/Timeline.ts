@@ -11,6 +11,23 @@ export interface PublicationLike {
     metadata?: { conformsTo?: Profile[] };
 }
 
+interface TocMatch {
+    link: Link;
+    bare: string;
+    order: number;
+    atStart: boolean;
+}
+
+interface TocIndex {
+    byHref: Map<string, TocMatch[]>;
+    fragmentOnly: TocMatch[];
+}
+
+interface ResourceStarts {
+    byHref: Map<string, TimelineItem>;
+    fallback?: TimelineItem;
+}
+
 /**
  * A TOC entry, mirroring `publication.toc`'s authored hierarchy and
  * contextualized with display-ready progression.  When a publication has no
@@ -94,16 +111,28 @@ export class Timeline {
         const conformsTo = publication.metadata?.conformsTo ?? [];
         const linkMap = new Map<TimelineItem, Link>();
         const items: TimelineItem[] = [];
+        const tocIndex = Timeline.indexToc(tocLinks, depth);
 
         for (let i = 0; i < roLinks.length; i++) {
             const ro = roLinks[i];
             const bare = Timeline.bareHref(ro.href);
 
-            const title =
-                ro.title ??
-                Timeline.findTitleInToc(tocLinks, bare, depth);
-
-            const tocChildren = Timeline.collectChildrenFromToc(tocLinks, bare, depth, 1, linkMap);
+            const candidates = Timeline.matchingTocEntries(tocIndex, bare);
+            const title = ro.title ?? (
+                candidates.find(candidate => candidate.atStart)?.link.title
+                ?? (candidates.length === 1 ? candidates[0].link.title : undefined)
+            );
+            const tocChildren: TimelineItem[] = [];
+            for (const candidate of candidates) {
+                if (candidate.atStart) continue;
+                const { link } = candidate;
+                const child: TimelineItem = {
+                    title: link.title,
+                    references: [candidate.bare === '' ? bare + link.href : link.href],
+                };
+                linkMap.set(child, link);
+                tocChildren.push(child);
+            }
 
             const item: TimelineItem = {
                 title,
@@ -299,71 +328,50 @@ export class Timeline {
     }
 
     // -------------------------------------------------------------------------
-    // TOC title resolution
+    // TOC indexing and title resolution
     // -------------------------------------------------------------------------
 
-    /**
-     * Resolve a display title for `bare` from the TOC, looking no deeper than
-     * `maxDepth` levels (1 = top-level entries only).  Priority:
-     *   1. A start-of-resource entry: bare href or `#t=0` (audio).
-     *   2. Exactly one fragment entry referencing this resource — unambiguous.
-     *   3. Multiple fragment entries — ambiguous, returns `undefined`.
-     */
-    private static findTitleInToc(
-        tocLinks: Link[],
-        bare: string,
-        maxDepth: number | undefined,
-    ): string | undefined {
-        const { atStart, fragments } = Timeline.collectTocCandidates(tocLinks, bare, maxDepth, 1);
-        if (atStart.length > 0) return atStart[0].title!;
-        if (fragments.length === 1) return fragments[0].title!;
-        return undefined;
+    /** Walk once in declaration order, rather than once per reading-order item. */
+    private static indexToc(tocLinks: Link[], maxDepth: number | undefined): TocIndex {
+        const index: TocIndex = { byHref: new Map(), fragmentOnly: [] };
+        let order = 0;
+        const visit = (links: Link[], depth: number): void => {
+            if (maxDepth !== undefined && depth > maxDepth) return;
+            for (const link of links) {
+                if (link.title) {
+                    const href = link.href;
+                    const bare = Timeline.bareHref(href);
+                    const match = { link, bare, order: order++, atStart: Timeline.isStartOfResource(href) };
+                    if (href.startsWith('#')) {
+                        index.fragmentOnly.push(match);
+                    } else {
+                        const matches = index.byHref.get(bare);
+                        if (matches) matches.push(match);
+                        else index.byHref.set(bare, [match]);
+                    }
+                }
+                if (link.children?.items?.length) visit(link.children.items, depth + 1);
+            }
+        };
+        visit(tocLinks, 1);
+        return index;
     }
 
-    /**
-     * Collect all TOC entries that reference `bare` as flat children, walking
-     * up to `maxDepth` levels deep.  Start-of-resource entries (#t=0 or no
-     * fragment) are excluded — they contribute to title resolution, not children.
-     * Order follows TOC declaration (depth-first).
-     */
-    private static collectChildrenFromToc(
-        tocLinks: Link[],
-        bare: string,
-        maxDepth: number | undefined,
-        currentDepth: number,
-        linkMap: Map<TimelineItem, Link>,
-    ): TimelineItem[] {
-        if (maxDepth !== undefined && currentDepth > maxDepth) return [];
-
-        const result: TimelineItem[] = [];
-
-        for (const link of tocLinks) {
-            const linkBare = Timeline.bareHref(link.href);
-            // Fragment-only hrefs (e.g. "#t=60" in single-track audio) have no bare href,
-            // so they are associated with the current resource. A hrefless link (e.g. a
-            // <span> grouping heading) also bareHrefs to '', but names no resource at all
-            // and must not match every resource.
-            const isFragmentOnly = link.href.startsWith('#');
-            const matchesBare = linkBare === bare || (isFragmentOnly && linkBare === '');
-            if (matchesBare && link.title && !Timeline.isStartOfResource(link.href)) {
-                // Prepend the resource href when the link uses a fragment-only reference.
-                const ref = linkBare === '' ? bare + link.href : link.href;
-                const child: TimelineItem = {
-                    title: link.title,
-                    references: [ref],
-                };
-                linkMap.set(child, link);
-                result.push(child);
-            }
-
-            if (link.children?.items?.length) {
-                result.push(...Timeline.collectChildrenFromToc(
-                    link.children.items, bare, maxDepth, currentDepth + 1, linkMap,
-                ));
-            }
+    /** Fragment-only audio entries match every resource; merge by authored order. */
+    private static matchingTocEntries(index: TocIndex, bare: string): readonly TocMatch[] {
+        const own = index.byHref.get(bare) ?? [];
+        const global = index.fragmentOnly;
+        if (!own.length) return global;
+        if (!global.length) return own;
+        const matches: TocMatch[] = [];
+        let i = 0;
+        let j = 0;
+        while (i < own.length && j < global.length) {
+            matches.push(own[i].order < global[j].order ? own[i++] : global[j++]);
         }
-
-        return result;
+        while (i < own.length) matches.push(own[i++]);
+        while (j < global.length) matches.push(global[j++]);
+        return matches;
     }
 
     /**
@@ -431,12 +439,18 @@ export class Timeline {
         return this._linkToItem;
     }
 
-    private buildTocEntries(links: Link[], maxDepth: number | undefined, currentDepth: number): ContextualizedTocEntry[] {
+    private buildTocEntries(links: Link[], maxDepth: number | undefined, currentDepth: number, resourceStarts?: ResourceStarts): ContextualizedTocEntry[] {
         if (maxDepth !== undefined && currentDepth > maxDepth) return [];
+        // Keep this lookup local to one TOC build, so a depth change rebuilds it
+        // from current item references. Values remain the original items: augment's
+        // position/scroll updates must still be visible to entryFor().
+        const starts = resourceStarts ?? this.indexResourceStarts();
         return links.map(link => {
-            const item = this.linkToItem.get(link) ?? this.resourceStartItem(link.href);
+            const item = this.linkToItem.get(link)
+                ?? starts.byHref.get(Timeline.bareHref(link.href))
+                ?? starts.fallback;
             const kids = link.children?.items?.length
-                ? this.buildTocEntries(link.children.items, maxDepth, currentDepth + 1)
+                ? this.buildTocEntries(link.children.items, maxDepth, currentDepth + 1, starts)
                 : [];
             return { ...this.entryFor(link, item), children: kids.length > 0 ? kids : undefined };
         });
@@ -467,6 +481,22 @@ export class Timeline {
     private resourceStartItem(href: string): TimelineItem | undefined {
         const bare = Timeline.bareHref(href);
         return this._allItems.find(i => this.itemMatchesHref(i, bare));
+    }
+
+    private indexResourceStarts(): ResourceStarts {
+        const byHref = new Map<string, TimelineItem>();
+        for (const item of this._allItems) {
+            let wildcard = false;
+            for (const reference of item.references) {
+                const bare = Timeline.bareHref(reference);
+                if (bare === '') wildcard = true;
+                else if (!byHref.has(bare)) byHref.set(bare, item);
+            }
+            // A fragment-only reference matches all resources. No later item
+            // can win the old first-match scan; earlier exact matches still win.
+            if (wildcard) return { byHref, fallback: item };
+        }
+        return { byHref };
     }
 
     private findTocEntryByLink(entries: ContextualizedTocEntry[], link: Link): ContextualizedTocEntry | undefined {
